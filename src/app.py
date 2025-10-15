@@ -3,8 +3,9 @@
 import logging
 import traceback
 import tkinter as tk
-from tkinter import ttk
 from basic import Basic
+from tkinter import ttk
+from tkinter import messagebox
 from config import COLOR_PALETTE, AppConfig
 from utils import get_network_status
 
@@ -36,7 +37,7 @@ class App:
     def _setup_window(self):
         # 设置窗口标题、透明度和置顶状态
         self.root.title(f"{AppConfig.APP_NAME} v{AppConfig.APP_VERSION}")
-        self.root.attributes("-topmost", True, "-alpha", 0.97)
+        self.root.attributes("-topmost", False, "-alpha", 0.97)
         self.root.resizable(False, False)
         self.root.config(padx=12)
 
@@ -63,7 +64,7 @@ class App:
                 else self.frames.get(config["master"], "main_frame")
             )
 
-            # 创建应用框架
+            # 创建组件框架
             frame = ttk.Frame(master)
             if name not in ["header_frame", "footer_frame"]:
                 frame.config(border=2, relief="solid")
@@ -75,12 +76,10 @@ class App:
                 frame.config(**config["config"])
 
             # 设置网格权重
-            if "row_weights" in config:
-                for row, weight in config["row_weights"]:
-                    frame.rowconfigure(row, weight=weight)
-            if "column_weights" in config:
-                for col, weight in config["column_weights"]:
-                    frame.columnconfigure(col, weight=weight)
+            for row, weight in config.get("row_weights", []):
+                frame.rowconfigure(row, weight=weight)
+            for col, weight in config.get("column_weights", []):
+                frame.columnconfigure(col, weight=weight)
 
             self.frames[name] = frame
 
@@ -113,16 +112,21 @@ class App:
 
     def _on_label_click(self, frame_name):
         """处理标签点击事件"""
-        # 创建模块窗口并隐藏主窗口
-        self.toplevel = tk.Toplevel(self.root)
-        self.root.withdraw()
-
-        # 实例化模块窗口组件
         if frame_name == 'basic_frame':
+            # 创建模块窗口并隐藏主窗口
+            self.toplevel = tk.Toplevel(self.root)
+            self.root.withdraw()
+
+            # 实例化模块窗口组件
             self.modules['basic_module'] = Basic(self.toplevel)
 
-        # 绑定模块窗口关闭事件
-        self.toplevel.protocol("WM_DELETE_WINDOW", self._show_main_win)
+            # 绑定模块窗口关闭事件
+            self.toplevel.protocol("WM_DELETE_WINDOW", self._show_main_win)
+        else:
+            messagebox.showinfo(
+                message="功能未开放",
+                detail="该功能正在开发中...",
+            )
 
     def _show_main_win(self):
         """返回应用主界面"""
