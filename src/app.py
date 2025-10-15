@@ -27,15 +27,15 @@ class App:
         self._create_frames()
         self._create_widgets()
 
-        # 启动网络监控
-        self.network_status = True
-        self._monitor_network()
+        # 网络状态监控
+        self.network_status = None
 
     def _setup_window(self):
         # 设置窗口标题、透明度和置顶状态
         self.root.title(f"{AppConfig.APP_NAME} v{AppConfig.APP_VERSION}")
         self.root.attributes("-topmost", True, "-alpha", 0.97)
         self.root.resizable(False, False)
+        self.root.config(padx=12)
 
         # 设置窗口大小和居中显示
         win_width, win_height = 600, 400
@@ -49,7 +49,6 @@ class App:
         # 设置网格权重
         self.root.rowconfigure(1, weight=1)
         self.root.columnconfigure(0, weight=1)
-        self.root.config(padx=12)
 
     def _create_frames(self):
         """创建组件框架"""
@@ -149,6 +148,7 @@ class App:
 
     def run(self):
         """运行应用程序的主循环"""
+        self.root.after(100, self._monitor_network)
         self.root.mainloop()
 
 
