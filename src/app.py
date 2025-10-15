@@ -49,6 +49,7 @@ class App:
         # 设置网格权重
         self.root.rowconfigure(1, weight=1)
         self.root.columnconfigure(0, weight=1)
+        self.root.config(padx=12)
 
     def _create_frames(self):
         """创建组件框架"""
@@ -97,13 +98,14 @@ class App:
                     "copyright_label",
                 ]:
                     widget.config(cursor="hand")
+                    widget.bind("<Button-1>", lambda e, frame_name=config['master']: self._on_label_click(frame_name))
+
 
             # 组件布局配置
             if "grid" in config:
                 widget.grid(**config["grid"])
             if "config" in config:
                 widget.config(**config["config"])
-                widget.bind("<Button-1>", lambda e, frame_name=config['master']: self._on_label_click(frame_name))
 
             self.widgets[key] = widget
 
