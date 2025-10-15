@@ -3,6 +3,7 @@
 import logging
 import tkinter as tk
 from tkinter import ttk
+from basic import Basic
 from config import FONT_FAMILY, FONT_SIZE, AppConfig
 from utils import get_network_status
 
@@ -12,11 +13,11 @@ WIDGET = AppConfig.WIDGET
 
 class App:
     """智慧教育平台资源下载工具"""
-
     def __init__(self):
         """初始化应用程序"""
         self.frames = {}
         self.widgets = {}
+        self.module_win = None
 
         # 创建应用窗口
         self.root = tk.Tk()
@@ -34,6 +35,7 @@ class App:
         # 设置窗口标题、透明度和置顶状态
         self.root.title(f"{AppConfig.APP_NAME} v{AppConfig.APP_VERSION}")
         self.root.attributes("-topmost", True, "-alpha", 0.97)
+        self.root.resizable(False, False)
 
         # 设置窗口大小和居中显示
         win_width, win_height = 600, 400
@@ -101,8 +103,29 @@ class App:
                 widget.grid(**config["grid"])
             if "config" in config:
                 widget.config(**config["config"])
+                widget.bind("<Button-1>", lambda e, frame_name=config['master']: self._on_label_click(frame_name))
 
             self.widgets[key] = widget
+
+    def _on_label_click(self, frame_name):
+        """处理标签点击事件"""
+        # 创建模块窗口并隐藏主窗口
+        self.module_win = tk.Toplevel(self.root)
+        self.root.withdraw()
+
+        # 实例化模块窗口组件
+        if frame_name == 'basic_frame':
+            self.basic = Basic(self.module_win)
+
+        # 绑定模块窗口关闭事件
+        self.module_win.protocol("WM_DELETE_WINDOW", self._show_main_win)
+
+    def _show_main_win(self):
+        """返回应用主界面"""
+        if self.module_win:
+            self.module_win.destroy()
+            self.module_win = None
+        self.root.deiconify()
 
     def _monitor_network(self):
         """监听网络状态"""
