@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """应用程序核心模块"""
 import logging
+import traceback
 import tkinter as tk
 from tkinter import ttk
 from basic import Basic
@@ -16,8 +17,10 @@ class App:
     def __init__(self):
         """初始化应用程序"""
         self.frames = {}
+        self.modules = {}
         self.widgets = {}
-        self.module_win = None
+        self.toplevel = None
+
 
         # 创建应用窗口
         self.root = tk.Tk()
@@ -111,21 +114,21 @@ class App:
     def _on_label_click(self, frame_name):
         """处理标签点击事件"""
         # 创建模块窗口并隐藏主窗口
-        self.module_win = tk.Toplevel(self.root)
+        self.toplevel = tk.Toplevel(self.root)
         self.root.withdraw()
 
         # 实例化模块窗口组件
         if frame_name == 'basic_frame':
-            self.basic = Basic(self.module_win)
+            self.modules['basic_module'] = Basic(self.toplevel)
 
         # 绑定模块窗口关闭事件
-        self.module_win.protocol("WM_DELETE_WINDOW", self._show_main_win)
+        self.toplevel.protocol("WM_DELETE_WINDOW", self._show_main_win)
 
     def _show_main_win(self):
         """返回应用主界面"""
-        if self.module_win:
-            self.module_win.destroy()
-            self.module_win = None
+        if self.toplevel:
+            self.toplevel.destroy()
+            self.toplevel = None
         self.root.deiconify()
 
     def _monitor_network(self):
@@ -148,15 +151,24 @@ class App:
 
     def run(self):
         """运行应用程序的主循环"""
-        self.root.after(100, self._monitor_network)
-        self.root.mainloop()
+        try:
+            self.root.after(100, self._monitor_network)
+            self.root.mainloop()
+        except Exception as e:
+            logging.error(f"程序执行出错: {str(e)}")
+            logging.debug(traceback.format_exc())
 
 
 def main():
     """应用程序主入口函数"""
-    # 配置日志记录
+    # 配置日志级别和格式
     logging.basicConfig(
-        level=logging.DEBUG, format="%(filename)s(%(lineno)d)> %(message)s"
+        level=logging.DEBUG, 
+        format="%(filename)s(%(lineno)d)> %(message)s",
+        handlers=[
+            logging.FileHandler("app_errors.log"),
+            logging.StreamHandler()
+        ]
     )
 
     # 创建并运行应用程序
