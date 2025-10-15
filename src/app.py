@@ -4,7 +4,7 @@ import logging
 import tkinter as tk
 from tkinter import ttk
 from basic import Basic
-from config import FONT_FAMILY, FONT_SIZE, AppConfig
+from config import COLOR_PALETTE, AppConfig
 from utils import get_network_status
 
 LAYOUT = AppConfig.LAYOUT
@@ -136,10 +136,10 @@ class App:
             self.network_status = status["connected"]
 
             if status["connected"]:
-                self.widgets["network_label"].config(text="●", foreground="#34C759")
+                self.widgets["network_label"].config(text="●", foreground=COLOR_PALETTE['success'])
             else:
                 self.widgets["network_label"].config(
-                    text="● " + status["message"], foreground="#FF6B6B"
+                    text="● " + status["message"], foreground=COLOR_PALETTE['error']
                 )
 
         # 定时重复检查（10s）
