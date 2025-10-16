@@ -1,10 +1,94 @@
 import os
-import sys
 import json
 import datetime
 import platform
 import requests
-from PIL import Image
+
+
+def parse_material(materials):
+    """解析教材层级数据
+
+    Args:
+        materials: 教材层级数据
+
+    Returns:
+        dict: 教材数据字典 {tag_id: {'tag_name': str, 'children': dict}}
+    """
+    if not materials:
+        return None
+
+    parsed = {}
+    for m in materials:
+        for c in m["children"]:
+            parsed[c["tag_id"]] = {
+                "tag_name": c["tag_name"],
+                "children": parse_material(c["hierarchies"]),
+            }
+
+    return parsed
+
+
+def parse_resource(materials):
+    """解析教材资源数据
+
+    Args:
+        materials: 教材层级数据
+
+    Returns:
+        dict: 资源数据字典 {res_id: res_details}
+    """
+    # if not materials:
+    #     return None
+
+    parsed = {}
+    for res in materials.values():
+        if "id" in res:
+            parsed[res["id"]] = res
+        elif "children" in res:
+            children = parse_resource(res["children"])
+            parsed.update(children)  # type: ignore
+
+    return parsed
+
+
+def format_bytes(bytes_value):
+    """格式化字节大小"""
+    if bytes_value == 0:
+        return 0
+
+    try:
+        units = ["B", "KB", "MB", "GB", "TB"]
+        size = float(bytes_value)
+        unit_index = 0
+        while size >= 1024 and unit_index < len(units) - 1:
+            size /= 1024
+            unit_index += 1
+        return f"{size:.2f} {units[unit_index]}"
+    except (ValueError, TypeError):
+        return "--"
+
+
+def format_title(title):
+    """格式化资源标题"""
+    prefixes = ["（根据2022年版课程标准修订）", "(根据2022年版课程标准修订)"]
+
+    if "主义思想" in title:
+        title = title.split("主义思想")[-1]
+
+    for prefix in prefixes:
+        if prefix in title:
+            title = title.replace(prefix, "")
+
+    return title.strip()
+
+
+def format_date(date_str):
+    """格式化日期字符串"""
+    if not date_str:
+        return "--"
+
+    date_str = date_str[:-5] + date_str[-5:-2] + ":" + date_str[-2:]
+    return datetime.datetime.fromisoformat(date_str).strftime("%Y-%m-%d")
 
 
 def set_access_token(token: str):
@@ -142,89 +226,6 @@ def get_system_paths():
     }
 
 
-def parse_hierarchy(hierarchy):
-    """解析教材层级数据
-
-    Args:
-        hierarchy: 教材层级数据
-
-    Returns:
-        dict: 教材数据字典 {tag_id: {'tag_name': str, 'children': dict}}
-    """
-    if not hierarchy:
-        return None
-
-    parsed = {}
-    for h in hierarchy:
-        for c in h["children"]:
-            parsed[c["tag_id"]] = {
-                "tag_name": c["tag_name"],
-                "children": parse_hierarchy(c["hierarchies"]),
-            }
-    return parsed
-
-
-def parse_resource(resource):
-    """解析资源层级数据
-
-    Args:
-        resource: 资源层级数据
-
-    Returns:
-        dict: 资源数据字典 {res_id: res_details}
-    """
-    if not resource:
-        return None
-
-    parsed = {}
-    for res in resource.values():
-        if "id" in res:
-            parsed[res["id"]] = res
-        elif "children" in res:
-            parsed.update(parse_resource(res["children"]))
-    return parsed
-
-
-def format_bytes(bytes_value):
-    """格式化字节大小"""
-    if bytes_value == 0:
-        return 0
-
-    try:
-        units = ["B", "KB", "MB", "GB", "TB"]
-        size = float(bytes_value)
-        unit_index = 0
-        while size >= 1024 and unit_index < len(units) - 1:
-            size /= 1024
-            unit_index += 1
-        return f"{size:.2f} {units[unit_index]}"
-    except (ValueError, TypeError):
-        return "--"
-
-
-def format_title(title):
-    """格式化资源标题"""
-    prefixes = ["（根据2022年版课程标准修订）", "(根据2022年版课程标准修订)"]
-
-    if "主义思想" in title:
-        title = title.split("主义思想")[-1]
-
-    for prefix in prefixes:
-        if prefix in title:
-            title = title.replace(prefix, "")
-
-    return title.strip()
-
-
-def format_date(date_str):
-    """格式化日期字符串"""
-    if not date_str:
-        return "--"
-
-    date_str = date_str[:-5] + date_str[-5:-2] + ":" + date_str[-2:]
-    return datetime.datetime.fromisoformat(date_str).strftime("%Y-%m-%d")
-
-
 def get_network_status():
     """获取当前网络状态
 
@@ -244,6 +245,10 @@ def get_network_status():
         status["message"] = "网络连接异常"
 
     return status
+
+
+def toggle_widget_state(widget, visible):
+    widget.grid() if visible else widget.grid_remove()
 
 
 def save_file(data, filename):
