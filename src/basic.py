@@ -16,9 +16,10 @@ from utils import (
     get_access_token,
     get_system_paths,
     parse_resource,
-    parse_hierarchy,
+    parse_material,
     save_file,
     set_access_token,
+    toggle_widget_state,
 )
 from config import COLOR_PALETTE, BasicConfig
 
@@ -143,7 +144,7 @@ class Basic:
                 # 处理教材选择菜单（绑定变量跟踪）
                 if config["master"] == "material_frame":
                     self.trace_ids[key] = self.variables[key].trace_add(
-                        "write", partial(self._update_options, key)
+                        "write", partial(self._on_option_change, key)
                     )
 
             elif widget_type == "Checkbutton":
@@ -158,7 +159,7 @@ class Basic:
 
                 # 处理访问令牌输入（绑定事件）
                 if key == "token_entry":
-                    widget.bind("<FocusOut>", self._on_token_focus_out)
+                    widget.bind("<FocusOut>", self._on_entry_focus_out)
                     widget.bind("<FocusIn>", lambda e: e.widget.config(show=""))
                     widget.bind("<Return>", lambda e: e.widget.master.focus_set())
 
@@ -170,7 +171,7 @@ class Basic:
 
                 # 处理目录选择按钮（绑定事件）
                 if key == "path_button":
-                    widget.config(command=self._browse_directory)
+                    widget.config(command=self._on_browse_directory)
 
                 # 处理开始下载按钮（绑定事件）
                 elif key == "download_button":
@@ -206,31 +207,35 @@ class Basic:
     def _after_created(self):
         """初始化模块数据"""
         self._init_materials()
-
         self._load_system_paths()
         self._load_access_token()
         self._sync_network_status()
 
     def _init_materials(self):
-        """初始化教材资源"""
-        # try:
-        material_data = next(iter(self._fetch_materials().values()))  # type: ignore
-        self.materials = material_data.get("children", {})
+        """加载教材资源"""
+        try:
+            materials = next(iter(self._fetch_materials().values()))  # type: ignore
+            self.materials = materials.get("children", {})
 
-        # 加载教材菜单选项
-        for material in self.materials.values():
-            self.widgets["material_menu"]["menu"].add_command(
-                label=material["tag_name"],
-                command=lambda tag_name=material["tag_name"]: self.variables[
-                    "material_menu"
-                ].set(tag_name),
+            # 加载教材菜单选项
+            material_var = self.variables["material_menu"]
+            material_menu = self.widgets["material_menu"]
+
+            for material in self.materials.values():
+                tag_name = material["tag_name"]
+                material_menu["menu"].add_command(
+                    label=tag_name,
+                    command=lambda tag_name=tag_name: material_var.set(tag_name),
+                )
+
+            # 启用教材菜单组件
+            material_menu.config(state="normal")
+        except Exception as e:
+            logging.error(f"教材解析失败: {str(e)}")
+            messagebox.showerror(
+                message="教材解析失败",
+                detail="请重新打开应用或稍后再试",
             )
-
-        # except Exception:
-        #     messagebox.showerror(
-        #         message="教材解析错误",
-        #         detail="请重新打开应用或稍后再试",
-        #     )
 
     def _load_system_paths(self):
         """加载系统公共路径"""
@@ -292,42 +297,45 @@ class Basic:
         # 定时重复检查（10s）
         self.root.after(5000, self._sync_network_status)
 
-    def _update_options(self, widget_key, *args):
-        """更新选项菜单的选项
+    def _on_option_change(self, widget_key, *args):
+        """处理教材菜单级联更新
 
         Args:
-            widget_key (str): 变量名称
             widget_key (str): 控件名称
         """
         # 是否停止后续迭代
         stop_iteration = False
 
-        # 调整菜单选项层级
-        self._adjust_widgets(widget_key)
+        # 更新菜单级联状态
+        self._update_menu_state(widget_key)
 
-        # 获取显示菜单名称
+        # 获取当前可见菜单
         widget_keys = [
             key
             for key, widget in self.widgets.items()
             if (WIDGET[key]["master"] == "material_frame" and widget.winfo_ismapped())
         ]
 
-        # 获取当前菜单层级（遍历层级）
+        # 获取当前菜单索引（作为遍历起始层级）
         widget_index = widget_keys.index(widget_key)
 
         # 重置后续菜单选项
-        self._reset_options(widget_keys, widget_index + 1)
+        self._reset_menu_option(widget_keys, widget_index + 1)
 
         # 清空当前资源列表
         resource_view = self.widgets["resource_view"]
         resource_view.delete(*resource_view.get_children())
         self.widgets["download_button"].config(state="disabled")
 
+        # 重置下载按钮状态
+        self.resources = {}
+        self.widgets["download_button"].config(state="disabled")
+
         # 重置任务状态标签
         self.status = {}
-        self._update_status()
+        self._update_status_label()
 
-        # 获取子级层级数据
+        # 获取级联菜单数据
         materials = self.materials
         for i in range(widget_index + 1):
             selected_key = widget_keys[i]
@@ -342,12 +350,12 @@ class Basic:
                 stop_iteration = True
                 break
 
-        # 更新子级菜单选项
+        # 更新级联菜单组件
         if widget_index < (len(widget_keys) - 1) and not stop_iteration:
             next_key = widget_keys[widget_index + 1]
             next_widget = self.widgets[next_key]
 
-            # 添加子级菜单选项
+            # 添加级联菜单选项
             for material in materials.values():
                 next_widget["menu"].add_command(
                     label=material["tag_name"],
@@ -356,272 +364,32 @@ class Basic:
                     ].set(tag_name),
                 )
 
-            # 启用子级菜单选项
+            # 启用级联菜单组件
             next_widget.config(state="normal")
 
+        # 更新资源列表视图
         if widget_index == len(widget_keys) - 1 or stop_iteration:
-            # 更新资源列表视图
-            self.resources = parse_resource(materials)
-            self._update_resources()
+            try:
+                self.resources = parse_resource(materials)
+                self._update_resource_view()
+            except Exception as e:
+                logging.error(f"资源解析失败: {str(e)}")
+                messagebox.showerror(
+                    message="资源解析失败",
+                    detail="请重新打开应用或稍后再试",
+                )
 
             # 更新任务状态标签
-            self.status["count_total"] = len(self.resources)  # type: ignore
             self.status["size_total"] = sum(
                 resource["custom_properties"].get("size", 0)
                 for resource in self.resources.values()  # type: ignore
             )
-            self._update_status()
+            self.status["count_total"] = len(self.resources)  # type: ignore
+            self._update_status_label()
 
-            # 启用下载按钮状态
-            self.widgets["download_button"].config(state="normal")
-
-    def _update_resources(self):
-        """插入资源到列表视图"""
-        for res in self.resources.values():
-            self.widgets["resource_view"].insert(
-                "",
-                "end",
-                res["id"],
-                values=(
-                    "  " + format_title(res["title"]),
-                    (
-                        res["provider_list"][0]
-                        .get("name", "--")
-                        .replace("义务教育信息科技课程教学指南开发课题组", "--")
-                        if res["provider_list"]
-                        else "--"
-                    ),
-                    format_bytes(res["custom_properties"].get("size", "")) + "  ",
-                ),
-            )
-
-    def _download_documents(self, file_url, file_path):
-        """下载资源文档"""
-        response = requests.get(file_url, stream=True)
-        response.raise_for_status()
-
-        with open(file_path, "wb") as file:
-            for chunk in response.iter_content(chunk_size=8192):
-                file.write(chunk)
-
-    def _update_status(self):
-        """更新任务状态标签"""
-        status = self.status
-        widgets = self.widgets
-
-        # 格式化文件大小
-        size_total = format_bytes(status.get("size_total", 0))
-        size_completed = format_bytes(status.get("size_completed", 0))
-        size_text = f"{size_completed} / {size_total}" if size_completed else size_total
-
-        # 格式化文件数量
-        count_total = status.get("count_total", "?")
-        count_completed = status.get("count_completed", 0)
-        count_text = (
-            f"📖  {count_completed} / {count_total} 个文件"
-            if count_completed
-            else f"📖  {count_total} 个文件"
-        )
-
-        # 更新状态标签文本
-        if status:
-            total_text = count_text + (f"  |  {size_text}" if size_total else "")
-            widgets["total_label"].config(text=total_text)
-            widgets["speed_label"].config(text=f"{status.get('download_speed', '')}")
-            widgets["eta_label"].config(text=f"{status.get('download_eta', '')}")
-        else:
-            widgets["total_label"].config(text=WIDGET["total_label"]["text"])
-            widgets["speed_label"].config(text="")
-            widgets["eta_label"].config(text="")
-
-    def _browse_directory(self):
-        """自定义下载路径"""
-        directory = filedialog.askdirectory(parent=self.root)
-
-        if directory:
-            # 获取目录名称
-            folder_name = os.path.basename(directory)
-            if not folder_name:
-                folder_name = "自定义"
-
-            # 设置默认路径
-            self.variables["path_menu"].set(folder_name)
-
-    def _adjust_widgets(self, widget_key):
-        """调整菜单选项层级"""
-        material_value = self.variables["material_menu"].get()
-        subject_value = (
-            None
-            if widget_key == "material_menu"
-            else self.variables["subject_menu"].get()
-        )
-        category_value = (
-            None
-            if widget_key == "material_menu"
-            else self.variables["category_menu"].get()
-        )
-
-        # 处理信息科技选项
-        provider_menu = self.widgets["provider_menu"]
-        is_info_tech = (
-            material_value in ["小学", "初中"] and subject_value == "信息科技"
-        )
-
-        if is_info_tech:
-            provider_menu.grid_remove()
-            self._reset_options(["provider_menu"], 0)
-            self.widgets["subject_menu"].config(width=48)
-        else:
-            provider_menu.grid()
-            self.widgets["subject_menu"].config(
-                width=WIDGET["subject_menu"]["config"]["width"]
-            )
-
-        # 处理特殊教育选项
-        is_spec_educ = material_value == "特殊教育"
-        spec_edu_widgets = {
-            "category_menu": is_spec_educ,
-            "stage_menu": is_spec_educ and category_value != "培智学校",
-            "provider_menu": not is_spec_educ and not is_info_tech,
-        }
-
-        for widget_key, visible in spec_edu_widgets.items():
-            if not visible:
-                self.widgets[widget_key].grid_remove()
-                self._reset_options([widget_key], 0)
-            else:
-                self.widgets[widget_key].grid()
-
-        # 处理高中年级选项
-        grade_menu = self.widgets["grade_menu"]
-        is_special_subject = subject_value not in ["德语", "法语"]
-        is_special_grade = material_value == "高中" and is_special_subject
-        if is_special_grade:
-            grade_menu.grid_remove()
-            self._reset_options(["grade_menu"], 0)
-        else:
-            grade_menu.grid()
-
-        # 处理特殊教育选项（培智学校 >> 信息技术）
-        volume_menu = self.widgets["volume_menu"]
-        is_spec_edu_info_tech = (
-            is_spec_educ
-            and category_value == "培智学校"
-            and subject_value == "信息技术"
-        )
-
-        if is_spec_edu_info_tech:
-            volume_menu.grid()
-            grade_menu.grid_remove()
-            self._reset_options(["grade_menu"], 0)
-        elif is_special_grade:
-            grade_menu.grid_remove()
-            volume_menu.grid_remove()
-            self._reset_options(["grade_menu", "volume_menu"], 0)
-        else:
-            grade_menu.grid()
-            volume_menu.grid_remove()
-            self._reset_options(["volume_menu"], 0)
-
-        # 强制渲染菜单选项
-        self.frames["material_frame"].update_idletasks()
-
-    def _reset_options(self, widget_keys, start_index):
-        """重置剩余菜单控件"""
-        for i in range(start_index, len(widget_keys)):
-            widget_key = widget_keys[i]
-            widget = self.widgets[widget_key]
-
-            # 禁用菜单并清空菜单选项（保留 <全部> 选项）
-            widget.config(state="disabled")
-            widget["menu"].delete(1, "end")
-
-            # 移除变量跟踪，重置为默认值，然后恢复跟踪
-            widget_var = self.variables[widget_key]
-            widget_var.trace_remove("write", self.trace_ids[widget_key])
-            widget_var.set(WIDGET[widget_key].get("default", ""))
-            self.trace_ids[widget_key] = widget_var.trace_add(
-                "write", partial(self._update_options, widget_key)
-            )
-
-    def _fetch_materials(self):
-        """获取教材层级数据
-
-        Returns:
-            dict: 教材数据字典
-        """
-        try:
-            # 获取教材目录层级（专题/电子教材/{学级}/{学科}/{版本}/{年级}）
-            tag_data = self.session.get(BasicConfig.TAG_URL).json()
-            materials = parse_hierarchy(tag_data.get("hierarchies", []))
-
-            # 获取教材资源链接
-            url_data = self.session.get(BasicConfig.RES_URL).json()
-            urls = url_data.get("urls", "").split(",")
-
-            # 生成教材层级数据
-            for url in filter(None, urls):
-                try:
-                    res_data = self.session.get(url).json()
-                    for res in res_data:
-                        # 获取资源层级路径（专题/电子教材/{学级}/{学科}/{版本}/{年级}/{册次}）
-                        tag_paths = res.get("tag_paths", [])
-                        if not tag_paths or not tag_paths[0]:
-                            continue
-
-                        # 获取教材层级节点（使用“电子教材”为根节点）
-                        path_parts = tag_paths[0].split("/")
-                        temp_root = materials[path_parts[1]]  # type: ignore
-
-                        # 跳过不在层级数据中的资源
-                        res_paths = path_parts[2:]
-                        if res_paths[0] not in temp_root.get("children", {}):
-                            continue
-
-                        # 遍历资源层级路径（{学级}/{学科}/{版本}/{年级}/{册次}）
-                        for path in res_paths:
-                            temp_root = temp_root["children"].get(path, temp_root)
-
-                        # 确保当前层级包含子节点
-                        if not temp_root["children"]:
-                            temp_root["children"] = {}
-
-                        # 在当前层级插入资源数据
-                        temp_root["children"][res["id"]] = res
-
-                except requests.RequestException as e:
-                    logging.warning(f"获取教材数据失败 ({url}): {str(e)}")
-                    continue
-
-            return materials
-
-        except requests.RequestException as e:
-            messagebox.showerror(
-                message="获取教材失败",
-                detail=f"请检查网络连接或重新打开应用",
-            )
-            logging.error(f"获取教材目录失败: {e}")
-            return {}
-
-    def _fetch_documents(self):
-        """获取资源文档数据
-
-        Returns:
-            dict: 文档数据字典
-        """
-        documents = {}
-        for res_id in self.resources.keys():
-            # 获取资源文档数据
-            response = self.session.get(
-                f"https://s-file-1.ykt.cbern.com.cn/zxx/ndrv2/resources/tch_material/details/{res_id}.json"
-            )
-            response.raise_for_status()
-            data = response.json()
-
-            # 存储资源文档数据
-            documents[res_id] = data
-
-        return documents
+            # 启用下载按钮组件
+            if self.resources:
+                self.widgets["download_button"].config(state="normal")
 
     def _on_download_click(self):
         """处理下载按钮点击事件"""
@@ -646,7 +414,20 @@ class Basic:
         #     thread.daemon = True
         #     thread.start()
 
-    def _on_token_focus_out(self, event):
+    def _on_browse_directory(self):
+        """自定义下载路径"""
+        directory = filedialog.askdirectory(parent=self.root)
+
+        if directory:
+            # 获取目录名称
+            folder_name = os.path.basename(directory)
+            if not folder_name:
+                folder_name = "自定义"
+
+            # 设置默认路径
+            self.variables["path_menu"].set(folder_name)
+
+    def _on_entry_focus_out(self, event):
         """处理令牌输入失去焦点事件"""
         event.widget.config(show="*")
 
@@ -674,4 +455,223 @@ class Basic:
             # 更新全局请求会话
             self.session.headers.update(
                 {"X-ND-AUTH": f'MAC id="{entry_value}",nonce="0",mac="0"'}
+            )
+
+    def _download_documents(self, file_url, file_path):
+        """下载资源文档"""
+        response = requests.get(file_url, stream=True)
+        response.raise_for_status()
+
+        with open(file_path, "wb") as file:
+            for chunk in response.iter_content(chunk_size=8192):
+                file.write(chunk)
+
+    def _fetch_materials(self):
+        """获取教材层级数据
+
+        Returns:
+            dict: 教材数据字典
+        """
+        try:
+            # 获取教材目录层级（专题/电子教材/{学级}/{学科}/{版本}/{年级}）
+            tag_data = self.session.get(BasicConfig.TAG_URL).json()
+            materials = parse_material(tag_data.get("hierarchies", []))
+
+            # 获取教材资源链接
+            url_data = self.session.get(BasicConfig.RES_URL).json()
+            urls = url_data.get("urls", "").split(",")
+
+            # 生成教材层级数据
+            for url in filter(None, urls):
+                try:
+                    res_data = self.session.get(url).json()
+                    for res in res_data:
+                        # 获取资源层级路径（专题/电子教材/{学级}/{学科}/{版本}/{年级}/{册次}）
+                        tag_paths = res.get("tag_paths", [])
+                        if not tag_paths or not tag_paths[0]:
+                            continue
+
+                        # 获取教材层级节点（使用“电子教材”为根节点）
+                        path_parts = tag_paths[0].split("/")
+                        temp_materials = materials[path_parts[1]]  # type: ignore
+
+                        # 跳过不在层级数据中的资源
+                        res_paths = path_parts[2:]
+                        if res_paths[0] not in temp_materials.get("children", {}):
+                            continue
+
+                        # 遍历资源层级路径（{学级}/{学科}/{版本}/{年级}/{册次}）
+                        for path in res_paths:
+                            temp_materials = temp_materials["children"].get(
+                                path, temp_materials
+                            )
+
+                        # 确保当前层级包含子节点
+                        if not temp_materials["children"]:
+                            temp_materials["children"] = {}
+
+                        # 在当前层级插入资源数据
+                        temp_materials["children"][res["id"]] = res
+                except requests.RequestException as e:
+                    logging.warning(f"获取教材数据失败 ({url}): {str(e)}")
+                    continue
+
+            return materials
+        except requests.RequestException as e:
+            logging.error(f"获取教材目录失败: {e}")
+            messagebox.showerror(
+                message="获取教材失败",
+                detail=f"请检查网络连接或重新打开应用",
+            )
+            return {}
+
+    def _fetch_documents(self):
+        """获取资源文档数据
+
+        Returns:
+            dict: 文档数据字典
+        """
+        documents = {}
+        for res_id in self.resources.keys():
+            # 获取资源文档数据
+            response = self.session.get(
+                f"https://s-file-1.ykt.cbern.com.cn/zxx/ndrv2/resources/tch_material/details/{res_id}.json"
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            # 存储资源文档数据
+            documents[res_id] = data
+
+        return documents
+
+    def _update_resource_view(self):
+        """更新资源列表视图"""
+        for resource in self.resources.values():
+            provider_list = resource.get("provider_list", [])
+            provider_name = (
+                provider_list[0].get("name", "--") if provider_list else "--"
+            )
+            FILTER_PROVIDER = "义务教育信息科技课程教学指南开发课题组"
+
+            custom_properties = resource.get("custom_properties", {})
+
+            self.widgets["resource_view"].insert(
+                "",
+                "end",
+                resource["id"],
+                values=(
+                    f"  {format_title(resource.get('title', '?'))}",
+                    provider_name.replace(FILTER_PROVIDER, "--"),
+                    f"{format_bytes(custom_properties.get('size', ''))}  ",
+                ),
+            )
+
+    def _update_menu_state(self, widget_key):
+        """更新菜单组件状态"""
+        material_value = self.variables["material_menu"].get()
+        if widget_key == "material_menu":
+            subject_value = category_value = None
+        else:
+            subject_value = self.variables["subject_menu"].get()
+            category_value = self.variables["category_menu"].get()
+
+        # 处理信息科技选项
+        is_info_tech = (
+            material_value in ["小学", "初中"] and subject_value == "信息科技"
+        )
+        if is_info_tech:
+            toggle_widget_state(self.widgets["provider_menu"], False)
+            self._reset_menu_option(["provider_menu"], 0)
+            subject_width = 48
+        else:
+            toggle_widget_state(self.widgets["provider_menu"], True)
+            subject_width = WIDGET["subject_menu"]["config"]["width"]
+
+        self.widgets["subject_menu"].config(width=subject_width)
+
+        # 处理特殊教育选项
+        is_spec_educ = material_value == "特殊教育"
+        spec_edu_widgets = {
+            "category_menu": is_spec_educ,
+            "stage_menu": is_spec_educ and category_value != "培智学校",
+            "provider_menu": not (is_spec_educ or is_info_tech),
+        }
+
+        for widget_key, visible in spec_edu_widgets.items():
+            toggle_widget_state(self.widgets[widget_key], visible)
+            self._reset_menu_option([widget_key], 0) if not visible else None
+
+        # 处理高中年级菜单和特殊教育信息技术
+        is_special_subject = subject_value not in ["德语", "法语"]
+        is_special_grade = material_value == "高中" and is_special_subject
+        is_spec_edu_info_tech = (
+            is_spec_educ
+            and category_value == "培智学校"
+            and subject_value == "信息技术"
+        )
+
+        # 处理年级菜单（显示条件：高中特殊学科或特殊教育非信息技术）
+        grade_visible = not (is_special_grade or is_spec_edu_info_tech)
+        toggle_widget_state(self.widgets["grade_menu"], grade_visible)
+        self._reset_menu_option(["grade_menu"], 0) if not grade_visible else None
+
+        # 处理册次菜单（显示条件：特殊教育信息技术）
+        volume_visible = is_spec_edu_info_tech
+        toggle_widget_state(self.widgets["volume_menu"], volume_visible)
+        self._reset_menu_option(["volume_menu"], 0) if not volume_visible else None
+
+        # 强制渲染以更新菜单组件状态
+        self.frames["material_frame"].update_idletasks()
+
+    def _update_status_label(self):
+        """更新任务状态标签"""
+
+        # 格式化文件大小
+        size_total = format_bytes(self.status.get("size_total", 0))
+        size_completed = format_bytes(self.status.get("size_completed", 0))
+        size_text = f"{size_completed} / {size_total}" if size_completed else size_total
+
+        # 格式化文件数量
+        count_total = self.status.get("count_total", "?")
+        count_completed = self.status.get("count_completed", 0)
+        count_text = (
+            f"📖  {count_completed} / {count_total} 个文件"
+            if count_completed
+            else f"📖  {count_total} 个文件"
+        )
+
+        # 更新状态标签文本
+        if self.status:
+            total_text = count_text + (f"  |  {size_text}" if size_total else "")
+            self.widgets["total_label"].config(text=total_text)
+            self.widgets["speed_label"].config(
+                text=f"{self.status.get('download_speed', '')}"
+            )
+            self.widgets["eta_label"].config(
+                text=f"{self.status.get('download_eta', '')}"
+            )
+        else:
+            self.widgets["total_label"].config(
+                text=WIDGET["total_label"].get("text", "")
+            )
+            self.widgets["speed_label"].config(text="")
+            self.widgets["eta_label"].config(text="")
+
+    def _reset_menu_option(self, widget_keys, start_index):
+        """重置剩余教材菜单选项"""
+        for i in range(start_index, len(widget_keys)):
+            widget_key = widget_keys[i]
+            widget = self.widgets[widget_key]
+
+            # 禁用菜单并清空菜单选项（保留 <全部> 选项）
+            widget.config(state="disabled")
+            widget["menu"].delete(1, "end")
+
+            # 移除变量跟踪，重置为默认值，然后恢复跟踪
+            widget_var = self.variables[widget_key]
+            widget_var.trace_remove("write", self.trace_ids[widget_key])
+            widget_var.set(WIDGET[widget_key].get("default", ""))
+            self.trace_ids[widget_key] = widget_var.trace_add(
+                "write", partial(self._on_option_change, widget_key)
             )
