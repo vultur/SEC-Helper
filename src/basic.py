@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Basic模块"""
 import os
+import logging
 import requests
 import tkinter as tk
 from tkinter import ttk
@@ -19,60 +20,54 @@ from utils import (
     save_file,
     set_access_token,
 )
-from config import AppConfig, BasicConfig
+from config import COLOR_PALETTE, BasicConfig
 
 LAYOUT = BasicConfig.LAYOUT
 WIDGET = BasicConfig.WIDGET
 
 
 class Basic:
-    """创建和管理应用程序的组件和布局"""
+    """中小学智慧教育平台资源下载工具"""
 
-    def __init__(self, root):
-        """初始化Basic组件"""
+    def __init__(self, root, main=None):
         self.root = root
+        self.main = main
         self._setup_window()
 
-        # 设置全局请求会话
+        # 全局请求会话
         self.session = requests.Session()
-        self.session.proxies = {"http": None, "https": None}
+        self.session.proxies = {"http": None, "https": None}  # type: ignore
         self.session.headers.update({"X-ND-AUTH": 'MAC id="0",nonce="0",mac="0"'})
 
-        # 定义应用相关变量
-        self.paths = get_system_paths()
+        # 定义应用变量
+        self.paths = {}
         self.status = {}
         self.frames = {}
         self.widgets = {}
 
-        # 定义资源相关变量
-        self.documents = {}
+        # 定义业务变量
         self.trace_ids = {}
         self.variables = {}
         self.materials = {}
         self.resources = {}
+        self.documents = {}
+        self.access_token = None
+        self.network_status = {}
 
-        # 创建框架和控件
+        # 创建框架和组件
         self._create_frames()
         self._create_widgets()
 
-        # 初始化资源列表
-        self._init_materials()
-
-        # 加载本地访问令牌
-        self.access_token = None
-        self._load_access_token()
+        # 初始化模块数据
+        self.root.after(3000, self._after_created)
 
     def _setup_window(self):
-        """设置窗口基本属性"""
-        # 窗口标题
-        self.root.title("AppConfig.WINDOW_TITLE")
+        # 设置窗口标题、透明度和置顶状态
+        self.root.title("中小学智慧教育平台 - 资源下载工具")
+        self.root.attributes("-topmost", False, "-alpha", 0.97)
+        self.root.resizable(False, False)
 
-        # 窗口属性
-        self.root.attributes(
-            "-topmost", True, "-alpha", 0.97
-        )
-
-        # 窗口大小和居中定位
+        # 设置窗口大小和居中显示
         win_width, win_height = 800, 600
         screen_width, screen_height = (
             self.root.winfo_screenwidth(),
@@ -81,126 +76,113 @@ class Basic:
         x, y = (screen_width - win_width) // 2, (screen_height - win_height) // 2
         self.root.geometry(f"{win_width}x{win_height}+{x}+{y}")
 
-        # 根窗口网格权重
+        # 设置网格权重
         self.root.rowconfigure(0, weight=1)
         self.root.columnconfigure(0, weight=1)
 
     def _create_frames(self):
-        """根据配置动态创建所有框架"""
-        for frame_name, frame_config in LAYOUT.items():
+        """创建组件框架"""
+        for name, config in LAYOUT.items():
             # 获取父框架
-            master_name = frame_config["master"]
-            if master_name == "root":
-                master = self.root
-            else:
-                master = self.frames.get(master_name)
+            master = (
+                self.root
+                if config["master"] == "root"
+                else self.frames.get(config["master"], "main_frame")
+            )
 
-            # 创建主框架（标签或容器）
-            if "text" in frame_config:
-                frame = ttk.Labelframe(master, text=frame_config["text"])
-            else:
-                frame = ttk.Frame(master)
+            # 创建组件框架（标签或容器）
+            frame = (
+                ttk.Labelframe(master, text=config["text"])
+                if "text" in config
+                else ttk.Frame(master)
+            )
 
-            # 设置框架布局
-            if "grid" in frame_config:
-                frame.grid(**frame_config["grid"])
-
-            # 设置框架属性
-            if "config" in frame_config:
-                frame.config(**frame_config["config"])
+            # 框架布局配置
+            if "grid" in config:
+                frame.grid(**config["grid"])
+            if "config" in config:
+                frame.config(**config["config"])
 
             # 设置网格权重
-            if "row_weights" in frame_config:
-                for row, weight in frame_config["row_weights"]:
-                    frame.rowconfigure(row, weight=weight)
-            if "column_weights" in frame_config:
-                for col, weight in frame_config["column_weights"]:
-                    frame.columnconfigure(col, weight=weight)
+            for row, weight in config.get("row_weights", []):
+                frame.rowconfigure(row, weight=weight)
+            for col, weight in config.get("column_weights", []):
+                frame.columnconfigure(col, weight=weight)
 
-            # 存储框架引用
-            self.frames[frame_name] = frame
+            self.frames[name] = frame
 
     def _create_widgets(self):
-        """根据配置动态创建所有控件"""
-        for widget_key, widget_config in WIDGET.items():
-
+        """创建组件元素"""
+        for key, config in WIDGET.items():
             # 获取父框架
-            master_name = widget_config["master"]
-            master = self.frames.get(master_name)
+            master = self.frames.get(config["master"])
 
-            # 获取控件类型
-            widget_type = widget_config.get("type")
+            # 获取组件类型
+            widget_type = config.get("type")
 
-            # 创建变量（如果需要）
-            if widget_type in ["OptionMenu", "Checkbutton", "Progressbar", "Entry"]:
+            # 创建组件变量（如果需要）
+            if widget_type in ["Checkbutton", "Progressbar", "OptionMenu", "Entry"]:
                 if widget_type == "Checkbutton":
-                    self.variables[widget_key] = tk.BooleanVar(
-                        value=widget_config.get("default", True)
+                    self.variables[key] = tk.BooleanVar(
+                        value=config.get("default", True)
                     )
                 elif widget_type == "Progressbar":
-                    self.variables[widget_key] = tk.DoubleVar(
-                        value=widget_config.get("default", 0)
-                    )
+                    self.variables[key] = tk.DoubleVar(value=config.get("default", 0))
                 else:
-                    self.variables[widget_key] = tk.StringVar(
-                        value=widget_config.get("default", "")
-                    )
+                    self.variables[key] = tk.StringVar(value=config.get("default", ""))
 
-            # 创建控件
+            # 创建组件元素（绑定变量及事件）
             if widget_type == "OptionMenu":
-                if widget_key == "path_menu":
-                    widget_config["options"] = list(self.paths.keys())
-                    widget_config["default"] = (
-                        widget_config["options"][0]
-                        if widget_config["options"]
-                        else "- 请选择 -"
-                    )
-
                 widget = ttk.OptionMenu(
                     master,
-                    self.variables[widget_key],
-                    widget_config.get("default", "- 请选择 -"),
-                    *widget_config.get("options", []),
+                    self.variables[key],
+                    config.get("default", "- 请选择 -"),
+                    *config.get("options", []),
                 )
 
-                if widget_config["master"] == "material_frame":
-                    self.trace_ids[widget_key] = self.variables[widget_key].trace_add(
-                        "write", partial(self._update_options, widget_key)
+                # 处理教材选择菜单（绑定变量跟踪）
+                if config["master"] == "material_frame":
+                    self.trace_ids[key] = self.variables[key].trace_add(
+                        "write", partial(self._update_options, key)
                     )
 
             elif widget_type == "Checkbutton":
                 widget = ttk.Checkbutton(
                     master,
-                    text=widget_config.get("text", ""),
-                    variable=self.variables[widget_key],
+                    text=config.get("text", "?"),
+                    variable=self.variables[key],
                 )
 
             elif widget_type == "Entry":
                 widget = ttk.Entry(master)
-                if widget_key == "token_entry":
+
+                # 处理访问令牌输入（绑定事件）
+                if key == "token_entry":
                     widget.bind("<FocusOut>", self._on_token_focus_out)
-                    widget.bind("<FocusIn>", lambda event: event.widget.config(show=""))
-                    widget.bind(
-                        "<Return>", lambda event: event.widget.master.focus_set()
-                    )
+                    widget.bind("<FocusIn>", lambda e: e.widget.config(show=""))
+                    widget.bind("<Return>", lambda e: e.widget.master.focus_set())
 
             elif widget_type == "Progressbar":
-                widget = ttk.Progressbar(master, variable=self.variables[widget_key])
+                widget = ttk.Progressbar(master, variable=self.variables[key])
 
             elif widget_type == "Button":
-                widget = ttk.Button(master, text=widget_config.get("text", ""))
-                if widget_key == "path_button":
+                widget = ttk.Button(master, text=config.get("text", "?"))
+
+                # 处理目录选择按钮（绑定事件）
+                if key == "path_button":
                     widget.config(command=self._browse_directory)
-                if widget_key == "download_button":
+
+                # 处理开始下载按钮（绑定事件）
+                elif key == "download_button":
                     widget.config(command=self._on_download_click)
 
             elif widget_type == "Label":
-                widget = ttk.Label(master, text=widget_config.get("text", ""))
+                widget = ttk.Label(master, text=config.get("text", ""))
 
             elif widget_type == "Treeview":
                 widget = ttk.Treeview(master, show="headings", selectmode="browse")
-                widget["columns"] = list(widget_config["columns"].keys())
-                for id, column in widget_config["columns"].items():
+                widget["columns"] = list(config["columns"].keys())
+                for id, column in config["columns"].items():
                     widget.heading(id, text=column["text"], anchor="center")
                     widget.column(
                         id,
@@ -209,51 +191,106 @@ class Basic:
                         anchor=column["anchor"],
                     )
 
-            # 设置网格布局
-            if "grid" in widget_config:
-                widget.grid(**widget_config["grid"])
+            # 组件布局配置
+            if "grid" in config:
+                widget.grid(**config["grid"])
+            if "config" in config:
+                widget.config(**config["config"])
 
-            # 设置控件属性
-            if "config" in widget_config:
-                widget.config(**widget_config["config"])
-
-            # 隐藏特殊控件（类别/学段/册次）
-            if widget_key in ["category_menu", "stage_menu", "volume_menu"]:
+            # 处理特殊组件（默认隐藏：类别/学段/册次）
+            if key in ["category_menu", "stage_menu", "volume_menu"]:
                 widget.grid_remove()
 
-            # 存储控件引用
-            self.widgets[widget_key] = widget
+            self.widgets[key] = widget
+
+    def _after_created(self):
+        """初始化模块数据"""
+        self._init_materials()
+
+        self._load_system_paths()
+        self._load_access_token()
+        self._sync_network_status()
 
     def _init_materials(self):
-        """初始化资源列表"""
-        try:
-            material_data = next(iter(self._fetch_materials().values()))
-            self.materials = material_data["children"]
+        """初始化教材资源"""
+        # try:
+        material_data = next(iter(self._fetch_materials().values()))  # type: ignore
+        self.materials = material_data.get("children", {})
 
-            # 加载教材菜单选项
-            for material in self.materials.values():
-                self.widgets["material_menu"]["menu"].add_command(
-                    label=material["tag_name"],
-                    command=lambda tag_name=material["tag_name"]: self.variables[
-                        "material_menu"
-                    ].set(tag_name),
+        # 加载教材菜单选项
+        for material in self.materials.values():
+            self.widgets["material_menu"]["menu"].add_command(
+                label=material["tag_name"],
+                command=lambda tag_name=material["tag_name"]: self.variables[
+                    "material_menu"
+                ].set(tag_name),
+            )
+
+        # except Exception:
+        #     messagebox.showerror(
+        #         message="教材解析错误",
+        #         detail="请重新打开应用或稍后再试",
+        #     )
+
+    def _load_system_paths(self):
+        """加载系统公共路径"""
+        self.paths = get_system_paths()
+        path_menu = self.widgets["path_menu"]
+
+        # 更新下载位置选项
+        for key in self.paths.keys():
+            path_menu["menu"].add_command(
+                label=key, command=partial(self.variables["path_menu"].set, key)
+            )
+
+        # 启用路径相关组件，设置默认路径
+        path_menu.config(state="normal")
+        self.widgets["path_button"].config(state="normal")
+        self.widgets["subdir_check"].config(state="normal")
+        self.variables["path_menu"].set(next(iter(self.paths.keys())))
+
+    def _load_access_token(self):
+        """读取本地访问令牌"""
+        access_token = get_access_token()
+        token_entry = self.widgets["token_entry"]
+
+        if access_token:
+            # 更新令牌组件
+            token_entry.delete(0, "end")
+            token_entry.insert(0, access_token)
+
+            # 更新令牌变量
+            self.access_token = access_token
+            self.variables["token_entry"].set(access_token)
+
+            # 提示更新信息
+            notice_label = self.widgets["notice_label"]
+            notice_label.config(text="🔐 令牌读取成功！")
+            self.root.after(3000, lambda: notice_label.config(text=""))
+
+        # 启用令牌相关组件
+        token_entry.config(state="normal")
+        self.widgets["help_button"].config(state="normal")
+
+    def _sync_network_status(self):
+        """同步网络状态"""
+        latest_status = self.main.network_status  # type: ignore
+
+        # 更新网络状态（仅当状态改变时）
+        if latest_status["connected"] != self.network_status.get("connected", None):
+            if latest_status["connected"]:
+                self.widgets["status_label"].config(
+                    text="●", foreground=COLOR_PALETTE["success"]
                 )
+            else:
+                self.widgets["status_label"].config(
+                    text="● " + latest_status["message"],
+                    foreground=COLOR_PALETTE["error"],
+                )
+            self.network_status = latest_status
 
-        except requests.RequestException:
-            messagebox.showerror(
-                message="数据加载异常",
-                detail="请检查网络连接或重新打开应用",
-            )
-        except (ValueError, KeyError):
-            messagebox.showerror(
-                message="数据解析错误",
-                detail="请重新打开应用或稍后再试",
-            )
-        except Exception:
-            messagebox.showerror(
-                message="未知错误",
-                detail="请重新打开应用或稍后再试",
-            )
+        # 定时重复检查（10s）
+        self.root.after(5000, self._sync_network_status)
 
     def _update_options(self, widget_key, *args):
         """更新选项菜单的选项
@@ -328,10 +365,10 @@ class Basic:
             self._update_resources()
 
             # 更新任务状态标签
-            self.status["count_total"] = len(self.resources)
+            self.status["count_total"] = len(self.resources)  # type: ignore
             self.status["size_total"] = sum(
                 resource["custom_properties"].get("size", 0)
-                for resource in self.resources.values()
+                for resource in self.resources.values()  # type: ignore
             )
             self._update_status()
 
@@ -511,49 +548,60 @@ class Basic:
         """获取教材层级数据
 
         Returns:
-            dict: 教材层级数据字典
+            dict: 教材数据字典
         """
-        # 获取教材层级数据
-        tags_resp = self.session.get(
-            "https://s-file-1.ykt.cbern.com.cn/zxx/ndrs/tags/tch_material_tag.json"
-        )
-        tags_resp.raise_for_status()
-        parsed_hier = parse_hierarchy(tags_resp.json().get("hierarchies", []))
+        try:
+            # 获取教材目录层级（专题/电子教材/{学级}/{学科}/{版本}/{年级}）
+            tag_data = self.session.get(BasicConfig.TAG_URL).json()
+            materials = parse_hierarchy(tag_data.get("hierarchies", []))
 
-        # 获取课本 URL 列表
-        list_resp = self.session.get(
-            "https://s-file-1.ykt.cbern.com.cn/zxx/ndrs/resources/tch_material/version/data_version.json"
-        )
-        list_resp.raise_for_status()
-        list_data = list_resp.json()["urls"].split(",")
+            # 获取教材资源链接
+            url_data = self.session.get(BasicConfig.RES_URL).json()
+            urls = url_data.get("urls", "").split(",")
 
-        # 生成课本层级数据
-        for url in list_data:
-            book_resp = self.session.get(url)
-            book_data = book_resp.json()
+            # 生成教材层级数据
+            for url in filter(None, urls):
+                try:
+                    res_data = self.session.get(url).json()
+                    for res in res_data:
+                        # 获取资源层级路径（专题/电子教材/{学级}/{学科}/{版本}/{年级}/{册次}）
+                        tag_paths = res.get("tag_paths", [])
+                        if not tag_paths or not tag_paths[0]:
+                            continue
 
-            for book in book_data:
-                # 解析课本路径（专题/电子教材/{学级}/{学科}/{版本}/{年级}/{册次}）
-                if len(book["tag_paths"]) > 0:
-                    tag_paths = book["tag_paths"][0].split("/")[2:]
+                        # 获取教材层级节点（使用“电子教材”为根节点）
+                        path_parts = tag_paths[0].split("/")
+                        temp_root = materials[path_parts[1]]  # type: ignore
 
-                    # 获取课本层级（[电子教材]）
-                    temp_hier = parsed_hier[book["tag_paths"][0].split("/")[1]]
+                        # 跳过不在层级数据中的资源
+                        res_paths = path_parts[2:]
+                        if res_paths[0] not in temp_root.get("children", {}):
+                            continue
 
-                    # 跳过不在层级数据中的课本
-                    if not tag_paths[0] in temp_hier["children"]:
-                        continue
+                        # 遍历资源层级路径（{学级}/{学科}/{版本}/{年级}/{册次}）
+                        for path in res_paths:
+                            temp_root = temp_root["children"].get(path, temp_root)
 
-                    # 解析课本层级
-                    for p in tag_paths:
-                        temp_hier = temp_hier["children"].get(p, temp_hier)
-                    if not temp_hier["children"]:
-                        temp_hier["children"] = {}
+                        # 确保当前层级包含子节点
+                        if not temp_root["children"]:
+                            temp_root["children"] = {}
 
-                    # 插入课本数据
-                    temp_hier["children"][book["id"]] = book
+                        # 在当前层级插入资源数据
+                        temp_root["children"][res["id"]] = res
 
-        return parsed_hier
+                except requests.RequestException as e:
+                    logging.warning(f"获取教材数据失败 ({url}): {str(e)}")
+                    continue
+
+            return materials
+
+        except requests.RequestException as e:
+            messagebox.showerror(
+                message="获取教材失败",
+                detail=f"请检查网络连接或重新打开应用",
+            )
+            logging.error(f"获取教材目录失败: {e}")
+            return {}
 
     def _fetch_documents(self):
         """获取资源文档数据
@@ -574,32 +622,6 @@ class Basic:
             documents[res_id] = data
 
         return documents
-
-    def _load_access_token(self):
-        """读取本地访问令牌"""
-        access_token = get_access_token()
-
-        if access_token:
-            # 设置全局访问令牌
-            self.access_token = access_token
-
-            # 更新访问令牌控件
-            token_entry = self.widgets["token_entry"]
-            token_entry.delete(0, "end")
-            token_entry.insert(0, access_token)
-
-            # 更新访问令牌变量
-            self.variables["token_entry"].set(access_token)
-
-            # 显示令牌更新提示
-            notice_label = self.widgets["notice_label"]
-            notice_label.config(text="🔐 令牌读取成功！")
-            self.root.after(3000, lambda: notice_label.config(text=""))
-
-            # 更新全局请求会话
-            self.session.headers.update(
-                {"X-ND-AUTH": f'MAC id="{access_token}",nonce="0",mac="0"'}
-            )
 
     def _on_download_click(self):
         """处理下载按钮点击事件"""
