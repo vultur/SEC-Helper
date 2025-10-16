@@ -15,13 +15,13 @@ WIDGET = AppConfig.WIDGET
 
 class App:
     """智慧教育平台资源下载工具"""
+
     def __init__(self):
         """初始化应用程序"""
         self.frames = {}
         self.modules = {}
         self.widgets = {}
         self.toplevel = None
-
 
         # 创建应用窗口
         self.root = tk.Tk()
@@ -32,7 +32,7 @@ class App:
         self._create_widgets()
 
         # 网络状态监控
-        self.network_status = None
+        self.network_status = {}
 
     def _setup_window(self):
         # 设置窗口标题、透明度和置顶状态
@@ -94,13 +94,17 @@ class App:
                 widget = ttk.Label(master, text=config.get("text", "?"))
                 if key not in [
                     "notice_label",
-                    "network_label",
+                    "status_label",
                     "statement_label",
                     "copyright_label",
                 ]:
                     widget.config(cursor="hand")
-                    widget.bind("<Button-1>", lambda e, frame_name=config['master']: self._on_label_click(frame_name))
-
+                    widget.bind(
+                        "<Button-1>",
+                        lambda e, frame_name=config["master"]: self._on_label_click(
+                            frame_name
+                        ),
+                    )
 
             # 组件布局配置
             if "grid" in config:
@@ -112,23 +116,23 @@ class App:
 
     def _on_label_click(self, frame_name):
         """处理标签点击事件"""
-        if frame_name == 'basic_frame':
+        if frame_name == "basic_frame":
             # 创建模块窗口并隐藏主窗口
             self.toplevel = tk.Toplevel(self.root)
             self.root.withdraw()
 
             # 实例化模块窗口组件
-            self.modules['basic_module'] = Basic(self.toplevel)
+            self.modules["basic_module"] = Basic(self.toplevel, main=self)
 
             # 绑定模块窗口关闭事件
-            self.toplevel.protocol("WM_DELETE_WINDOW", self._show_main_win)
+            self.toplevel.protocol("WM_DELETE_WINDOW", self._show_main_window)
         else:
             messagebox.showinfo(
                 message="功能未开放",
                 detail="该功能正在开发中...",
             )
 
-    def _show_main_win(self):
+    def _show_main_window(self):
         """返回应用主界面"""
         if self.toplevel:
             self.toplevel.destroy()
@@ -137,18 +141,20 @@ class App:
 
     def _monitor_network(self):
         """监听网络状态"""
-        status = get_network_status()
+        latest_status = get_network_status()
 
-        # 更新网络状态
-        if status["connected"] != self.network_status:
-            self.network_status = status["connected"]
-
-            if status["connected"]:
-                self.widgets["network_label"].config(text="●", foreground=COLOR_PALETTE['success'])
-            else:
-                self.widgets["network_label"].config(
-                    text="● " + status["message"], foreground=COLOR_PALETTE['error']
+        # 更新网络状态（仅当状态改变时）
+        if latest_status["connected"] != self.network_status.get("connected", None):
+            if latest_status["connected"]:
+                self.widgets["status_label"].config(
+                    text="●", foreground=COLOR_PALETTE["success"]
                 )
+            else:
+                self.widgets["status_label"].config(
+                    text="● " + latest_status["message"],
+                    foreground=COLOR_PALETTE["error"],
+                )
+            self.network_status = latest_status
 
         # 定时重复检查（10s）
         self.root.after(10000, self._monitor_network)
@@ -167,12 +173,9 @@ def main():
     """应用程序主入口函数"""
     # 配置日志级别和格式
     logging.basicConfig(
-        level=logging.DEBUG, 
+        level=logging.DEBUG,
         format="%(filename)s(%(lineno)d)> %(message)s",
-        handlers=[
-            logging.FileHandler("app_errors.log"),
-            logging.StreamHandler()
-        ]
+        handlers=[logging.FileHandler("app_errors.log"), logging.StreamHandler()],
     )
 
     # 创建并运行应用程序
