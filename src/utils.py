@@ -152,6 +152,24 @@ def get_access_token():
     return token
 
 
+def get_document_url(doc):
+    """获取文档下载地址"""
+    # for doc in self.documents.values():
+    #     file_url = doc["ti_storages"][0]
+    #     if not self.access_token:
+    #         file_url = re.sub(
+    #             r"^https?://(?:.+).ykt.cbern.com.cn/(.+)/([\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}).pkg/(.+)\.pdf$",
+    #             r"https://c1.ykt.cbern.com.cn/\1/\2.pkg/\3.pdf",
+    #             file_url,
+    #         )
+    #     file_path = os.path.join(save_path, f"{doc['title']}.pdf")  # type: ignore
+    #     thread = threading.Thread(
+    #         target=self._download_documents, args=(file_url, file_path)
+    #     )
+    #     thread.daemon = True
+    #     thread.start()
+
+
 def get_system_paths():
     """获取系统默认目录路径
 
