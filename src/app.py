@@ -151,7 +151,7 @@ class App:
                 )
             else:
                 self.widgets["status_label"].config(
-                    text="● " + latest_status["message"],
+                    text=f"● {latest_status['message']}",
                     foreground=COLOR_PALETTE["error"],
                 )
             self.network_status = latest_status
