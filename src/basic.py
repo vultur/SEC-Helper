@@ -243,9 +243,9 @@ class Basic:
         path_menu = self.widgets["path_menu"]
 
         # 更新下载位置选项
-        for key in self.paths.keys():
+        for folder in self.paths.keys():
             path_menu["menu"].add_command(
-                label=key, command=partial(self.variables["path_menu"].set, key)
+                label=folder, command=partial(self.variables["path_menu"].set, folder)
             )
 
         # 启用路径相关组件，设置默认路径
