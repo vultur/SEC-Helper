@@ -4,6 +4,24 @@ import datetime
 import platform
 import requests
 
+try:
+    from AppKit import (
+        NSSearchPathForDirectoriesInDomains,
+        NSUserDomainMask,
+        NSDocumentDirectory,
+        NSPicturesDirectory,
+        NSMusicDirectory,
+        NSMoviesDirectory,
+        NSDownloadsDirectory,
+        NSDesktopDirectory,
+    )
+
+    HAS_APPKIT = True
+except ImportError:
+    HAS_APPKIT = False
+
+os_name = platform.system()
+
 
 def parse_material(materials):
     """解析教材层级数据
@@ -93,8 +111,6 @@ def format_date(date_str):
 
 def set_access_token(token: str):
     """设置访问令牌"""
-    os_name = platform.system()
-
     if os_name == "Windows":
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, "Software\\sec-tools") as key:
             winreg.SetValueEx(key, "AccessToken", 0, winreg.REG_SZ, token)
@@ -115,8 +131,6 @@ def set_access_token(token: str):
 def get_access_token():
     """获取本地访问令牌"""
     token = ""
-    os_name = platform.system()
-
     if os_name == "Windows":
         with winreg.OpenKey(
             winreg.HKEY_CURRENT_USER, "Software\\sec-tools", 0, winreg.KEY_READ
@@ -134,6 +148,7 @@ def get_access_token():
         if os.path.exists(target_file):
             with open(target_file, "r") as f:
                 token = json.load(f).get("access_token")
+
     return token
 
 
@@ -143,87 +158,74 @@ def get_system_paths():
     Returns:
         dict: 路径字典
     """
-    # 基本路径设置
-    paths = {"user": os.path.expanduser("~")}
-    os_name = platform.system()
+    paths = {}
+    user_home = os.path.expanduser("~")
 
     # 通用路径映射
     default_paths = {
-        "documents": "Documents",
-        "pictures": "Pictures",
-        "music": "Music",
-        "downloads": "Downloads",
-        "desktop": "Desktop",
-        "videos": "Movies" if os_name == "Darwin" else "Videos",
+        "🗂️ 下载": os.path.join(user_home, "Downloads"),
+        "🗂️ 文档": os.path.join(user_home, "Documents"),
+        "🗂️ 图片": os.path.join(user_home, "Pictures"),
+        "🗂️ 音乐": os.path.join(user_home, "Music"),
+        "🗂️ 视频": os.path.join(
+            user_home, "Movies" if os_name == "Darwin" else "Videos"
+        ),
+        "🗂️ 桌面": os.path.join(user_home, "Desktop"),
     }
 
     # 初始化所有路径
-    for key, folder in default_paths.items():
-        paths[key] = os.path.join(paths["user"], folder)
+    paths.update(default_paths)
 
     # 平台特定路径处理
     if os_name == "Windows":
         if "USERPROFILE" in os.environ:
-            paths["user"] = os.environ["USERPROFILE"]
-            paths["documents"] = os.environ.get(
-                "DOCUMENTS", os.path.join(os.environ["USERPROFILE"], "Documents")
-            )
+            if "DOCUMENTS" in os.environ:
+                paths["🗂️ 文档"] = os.environ["DOCUMENTS"]
+            else:
+                paths["🗂️ 文档"] = os.path.join(os.environ["USERPROFILE"], "Documents")
 
-    elif os_name == "Darwin":
-        try:
-            from AppKit import (
-                NSSearchPathForDirectoriesInDomains,
-                NSUserDomainMask,
-                NSDocumentDirectory,
-                NSPicturesDirectory,
-                NSMusicDirectory,
-                NSMoviesDirectory,
-                NSDownloadsDirectory,
-                NSDesktopDirectory,
-            )
-
-            dir_map = {
-                "documents": NSDocumentDirectory,
-                "pictures": NSPicturesDirectory,
-                "music": NSMusicDirectory,
-                "videos": NSMoviesDirectory,
-                "downloads": NSDownloadsDirectory,
-                "desktop": NSDesktopDirectory,
-            }
-
-            for key, dir_type in dir_map.items():
-                paths[key] = NSSearchPathForDirectoriesInDomains(
-                    dir_type, NSUserDomainMask, True
-                )[0]
-        except ImportError:
-            pass
-
-    elif os_name == "Linux":
-        xdg_map = {
-            "documents": "XDG_DOCUMENTS_DIR",
-            "pictures": "XDG_PICTURES_DIR",
-            "music": "XDG_MUSIC_DIR",
-            "videos": "XDG_VIDEOS_DIR",
-            "downloads": "XDG_DOWNLOAD_DIR",
-            "desktop": "XDG_DESKTOP_DIR",
+    elif os_name == "Darwin" and HAS_APPKIT:
+        mac_dir_map = {
+            "🗂️ 下载": NSDownloadsDirectory,
+            "🗂️ 文档": NSDocumentDirectory,
+            "🗂️ 图片": NSPicturesDirectory,
+            "🗂️ 音乐": NSMusicDirectory,
+            "🗂️ 视频": NSMoviesDirectory,
+            "🗂️ 桌面": NSDesktopDirectory,
         }
 
-        for key, env_var in xdg_map.items():
+        for folder, dir_type in mac_dir_map.items():
+            try:
+                mac_path = NSSearchPathForDirectoriesInDomains(
+                    dir_type, NSUserDomainMask, True
+                )
+                if mac_path and isinstance(mac_path[0], str):
+                    paths[folder] = mac_path[0]
+            except Exception:
+                pass
+
+    elif os_name == "Linux":
+        linux_dir_map = {
+            "🗂️ 下载": "XDG_DOWNLOAD_DIR",
+            "🗂️ 文档": "XDG_DOCUMENTS_DIR",
+            "🗂️ 图片": "XDG_PICTURES_DIR",
+            "🗂️ 音乐": "XDG_MUSIC_DIR",
+            "🗂️ 视频": "XDG_VIDEOS_DIR",
+            "🗂️ 桌面": "XDG_DESKTOP_DIR",
+        }
+
+        for folder, env_var in linux_dir_map.items():
             if env_var in os.environ:
-                paths[key] = os.environ[env_var].replace("$HOME", paths["user"])
+                paths[folder] = os.environ[env_var].replace("$HOME", user_home)
 
     # 规范化所有路径
-    for key in paths:
-        paths[key] = os.path.normpath(os.path.abspath(paths[key]))
+    for folder in paths:
+        try:
+            paths[folder] = os.path.normpath(os.path.abspath(paths[folder]))
+        except Exception:
+            pass
 
-    return {
-        "🗂️ 下载": paths["downloads"],
-        "🗂️ 文档": paths["documents"],
-        "🗂️ 视频": paths["videos"],
-        "🗂️ 音乐": paths["music"],
-        "🗂️ 图片": paths["pictures"],
-        "🗂️ 桌面": paths["desktop"],
-    }
+    return paths
 
 
 def get_network_status():
