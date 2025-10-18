@@ -3,6 +3,7 @@
 import os
 import logging
 import requests
+import concurrent.futures
 import tkinter as tk
 from tkinter import ttk
 from tkinter import filedialog
@@ -14,17 +15,24 @@ from utils import (
     format_date,
     format_title,
     get_access_token,
+    get_pdf_storage,
     get_system_paths,
     parse_resource,
     parse_material,
-    save_file,
     set_access_token,
     toggle_widget_state,
 )
-from config import COLOR_PALETTE, BasicConfig
+from config import COLOR_PALETTE, APIConfig, BasicConfig
 
 LAYOUT = BasicConfig.LAYOUT
 WIDGET = BasicConfig.WIDGET
+
+HOST_PRIVATE = APIConfig.HOST_PRIVATE
+HOST_OVERSEA = APIConfig.HOST_OVERSEA
+
+MATERIAL_TAG = APIConfig.MATERIAL_TAG
+MATERIAL_RES = APIConfig.MATERIAL_RES
+MATERIAL_DETAIL = APIConfig.MATERIAL_DETAIL
 
 
 class Basic:
@@ -34,11 +42,6 @@ class Basic:
         self.root = root
         self.main = main
         self._setup_window()
-
-        # 全局请求会话
-        self.session = requests.Session()
-        self.session.proxies = {"http": None, "https": None}  # type: ignore
-        self.session.headers.update({"X-ND-AUTH": 'MAC id="0",nonce="0",mac="0"'})
 
         # 定义应用变量
         self.paths = {}
@@ -60,7 +63,11 @@ class Basic:
         self._create_widgets()
 
         # 初始化模块数据
-        self.root.after(3000, self._after_created)
+        self.session = APIConfig.create_session()
+        self.root.after(500, self._after_created)
+
+        # 创建异步线程池
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)  # type: ignore
 
     def _setup_window(self):
         # 设置窗口标题、透明度和置顶状态
@@ -192,6 +199,9 @@ class Basic:
                         anchor=column["anchor"],
                     )
 
+                for state, color in COLOR_PALETTE.items():
+                    widget.tag_configure(state, foreground=color)
+
             # 组件布局配置
             if "grid" in config:
                 widget.grid(**config["grid"])
@@ -259,6 +269,9 @@ class Basic:
         access_token = get_access_token()
         token_entry = self.widgets["token_entry"]
 
+        # 启用令牌输入组件（否则无法加载本地令牌）
+        token_entry.config(state="normal")
+
         if access_token:
             # 更新令牌组件
             token_entry.delete(0, "end")
@@ -268,13 +281,17 @@ class Basic:
             self.access_token = access_token
             self.variables["token_entry"].set(access_token)
 
+            # 更新会话令牌
+            self.session.headers["X-ND-AUTH"] = (
+                f'MAC id="{access_token}",nonce="0",mac="0"'
+            )
+
             # 提示更新信息
             notice_label = self.widgets["notice_label"]
             notice_label.config(text="🔐 令牌读取成功！")
             self.root.after(3000, lambda: notice_label.config(text=""))
 
         # 启用令牌相关组件
-        token_entry.config(state="normal")
         self.widgets["help_button"].config(state="normal")
 
     def _sync_network_status(self):
@@ -393,26 +410,51 @@ class Basic:
 
     def _on_download_click(self):
         """处理下载按钮点击事件"""
-        # self.documents = self._fetch_documents()
+        resource_view = self.widgets["resource_view"]
 
-        # # 构建文档保存路径
-        # save_path = self.paths.get(self.variables["path_menu"].get())
+        # 更新任务状态标签
+        status_label = self.widgets["status_label"]
+        status_label.config(
+            text="● 正在解析资源...", foreground=COLOR_PALETTE["warning"]
+        )
 
-        # # 解析文档下载链接
-        # for document in self.documents.values():
-        #     file_url = document["ti_storages"][0]
-        #     if not self.access_token:
-        #         file_url = re.sub(
-        #             r"^https?://(?:.+).ykt.cbern.com.cn/(.+)/([\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}).pkg/(.+)\.pdf$",
-        #             r"https://c1.ykt.cbern.com.cn/\1/\2.pkg/\3.pdf",
-        #             file_url,
-        #         )
-        #     file_path = os.path.join(save_path, f"{document['title']}.pdf")
-        #     thread = threading.Thread(
-        #         target=self._download_documents, args=(file_url, file_path)
-        #     )
-        #     thread.daemon = True
-        #     thread.start()
+        # 获取资源文档数据
+        self.documents = self._fetch_documents()
+
+        # 获取下载位置路径
+        path_menu = self.variables["path_menu"].get()
+        download_path = self.paths.get(path_menu, os.path.expanduser("~"))
+
+        # 是否创建子目录
+        subdir_enabled = self.variables["subdir_check"].get()
+
+        # 解析文档下载链接
+        host = HOST_PRIVATE if self.access_token else HOST_OVERSEA
+        for i, document in enumerate(self.documents.values()):
+            pdf_storage = get_pdf_storage(document.get("ti_items", []))
+            resource_path = document.get("resource_path")
+
+            if pdf_storage:
+                # 构建文件保存路径
+                save_path = (
+                    os.path.join(download_path, resource_path)
+                    if subdir_enabled
+                    else download_path
+                )
+                os.makedirs(save_path, exist_ok=True)
+
+                # 提交异步下载任务
+                self.executor.submit(
+                    self._stream_download_file,
+                    pdf_storage.format(ref_path=host),
+                    os.path.join(save_path, f"{document['title']}.pdf"),
+                )
+            else:
+                # 更新资源视图状态
+                resource_view.item(resource_view.get_children()[i], tags=("warning",))
+
+        # 更新任务状态标签
+        status_label.config(text="●", foreground=COLOR_PALETTE["success"])
 
     def _on_browse_directory(self):
         """自定义下载路径"""
@@ -445,6 +487,11 @@ class Basic:
             # 更新访问令牌变量
             self.variables["token_entry"].set(entry_value)
 
+            # 更新会话令牌
+            self.session.headers["X-ND-AUTH"] = (
+                f'MAC id="{entry_value}",nonce="0",mac="0"'
+            )
+
             # 显示令牌更新提示
             notice_label = self.widgets["notice_label"]
             notice_label.config(
@@ -457,13 +504,12 @@ class Basic:
                 {"X-ND-AUTH": f'MAC id="{entry_value}",nonce="0",mac="0"'}
             )
 
-    def _download_documents(self, file_url, file_path):
+    def _stream_download_file(self, file_url, save_path):
         """下载资源文档"""
-        response = requests.get(file_url, stream=True)
-        response.raise_for_status()
+        response = self.session.get(file_url, stream=True)
 
-        with open(file_path, "wb") as file:
-            for chunk in response.iter_content(chunk_size=8192):
+        with open(save_path, "wb") as file:
+            for chunk in response.iter_content(chunk_size=1024 * 1024):
                 file.write(chunk)
 
     def _fetch_materials(self):
@@ -474,20 +520,20 @@ class Basic:
         """
         try:
             # 获取教材目录层级（专题/电子教材/{学级}/{学科}/{版本}/{年级}）
-            tag_data = self.session.get(BasicConfig.TAG_URL).json()
+            tag_data = self.session.get(MATERIAL_TAG).json()
             materials = parse_material(tag_data.get("hierarchies", []))
 
             # 获取教材资源链接
-            url_data = self.session.get(BasicConfig.RES_URL).json()
-            urls = url_data.get("urls", "").split(",")
+            res_data = self.session.get(MATERIAL_RES).json()
+            urls = res_data.get("urls", "").split(",")
 
             # 生成教材层级数据
             for url in filter(None, urls):
                 try:
-                    res_data = self.session.get(url).json()
-                    for res in res_data:
+                    material_data = self.session.get(url).json()
+                    for material in material_data:
                         # 获取资源层级路径（专题/电子教材/{学级}/{学科}/{版本}/{年级}/{册次}）
-                        tag_paths = res.get("tag_paths", [])
+                        tag_paths = material.get("tag_paths", [])
                         if not tag_paths or not tag_paths[0]:
                             continue
 
@@ -501,17 +547,24 @@ class Basic:
                             continue
 
                         # 遍历资源层级路径（{学级}/{学科}/{版本}/{年级}/{册次}）
+                        resource_path = ""
                         for path in res_paths:
                             temp_materials = temp_materials["children"].get(
                                 path, temp_materials
                             )
+                            # 构建资源保存路径（基于层级路径生成）
+                            tag_name = temp_materials.get("tag_name")
+                            resource_path += (
+                                f"/{tag_name}" if tag_name not in resource_path else ""
+                            )
+                        material["resource_path"] = resource_path.lstrip("/")
 
                         # 确保当前层级包含子节点
                         if not temp_materials["children"]:
                             temp_materials["children"] = {}
 
                         # 在当前层级插入资源数据
-                        temp_materials["children"][res["id"]] = res
+                        temp_materials["children"][material["id"]] = material
                 except requests.RequestException as e:
                     logging.warning(f"获取教材数据失败 ({url}): {str(e)}")
                     continue
@@ -532,17 +585,22 @@ class Basic:
             dict: 文档数据字典
         """
         documents = {}
-        for res_id in self.resources.keys():
-            # 获取资源文档数据
-            response = self.session.get(
-                f"https://s-file-1.ykt.cbern.com.cn/zxx/ndrv2/resources/tch_material/details/{res_id}.json"
-            )
-            response.raise_for_status()
-            data = response.json()
+        resource_view = self.widgets["resource_view"]
+        for i, key in enumerate(self.resources.keys()):
+            try:
+                # 获取资源文档数据
+                documents[key] = self.session.get(MATERIAL_DETAIL.format(id=key)).json()
 
-            # 存储资源文档数据
-            documents[res_id] = data
+                # 获取资源文档路径
+                documents[key]["resource_path"] = self.resources[key].get(
+                    "resource_path"
+                )
+            except requests.RequestException as e:
+                logging.warning(f"获取资源文档失败 ({key}): {str(e)}")
 
+                # 更新资源视图状态
+                resource_view.item(resource_view.get_children()[i], tags=("warning",))
+                documents[key] = {}
         return documents
 
     def _update_resource_view(self):
